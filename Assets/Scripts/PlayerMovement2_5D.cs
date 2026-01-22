@@ -37,12 +37,24 @@ public class PlayerMovement2_5D : MonoBehaviour
     [Header("Dash Rules")]
     [SerializeField] private float dashCooldown = 0.15f;
 
+    [Header("Animation")]
+    [SerializeField] private Animator animator;
+    [SerializeField] private float runThreshold = 0.05f;
+
+    [Header("Facing (3D)")]
+    [Tooltip("Assign the VisualPivot transform (recommended). This is what will rotate on Y.")]
+    [SerializeField] private Transform visualPivot;
+
+    [Tooltip("Turning speed in degrees/second. 0 = instant flip. Try 360..1080.")]
+    [SerializeField] private float turnSmoothSpeed = 720f;
+
+    private static readonly int RunHash = Animator.StringToHash("Run");
+
     private Rigidbody rb;
     private Vector2 moveInput;
 
     private bool isGrounded;
     private bool wasGrounded;
-
     private int jumpsUsed;
 
     private bool isDashing;
@@ -51,42 +63,74 @@ public class PlayerMovement2_5D : MonoBehaviour
     private float lastNonZeroMoveX = 1f;
     private float nextDashTime;
 
-    // ✅ levegőben csak 1 dash
     private bool airDashUsed;
+
+    // Facing state
+    private Quaternion rightRot;
+    private Quaternion leftRot;
+    private Quaternion targetRot;
+    private bool facingRight = true;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        rb.constraints = RigidbodyConstraints.FreezeRotation | RigidbodyConstraints.FreezePositionZ;
 
-        rb.constraints = RigidbodyConstraints.FreezeRotation
-                       | RigidbodyConstraints.FreezePositionZ;
+        if (animator == null)
+            animator = GetComponentInChildren<Animator>();
+
+        // VisualPivot fallback
+        if (visualPivot == null)
+        {
+            if (animator != null && animator.transform.parent != null)
+                visualPivot = animator.transform.parent; // VisualPivot
+            else
+                visualPivot = transform;
+        }
+
+        // "Jobbra néz" = az induló rotáció
+        rightRot = visualPivot.localRotation;
+        leftRot = rightRot * Quaternion.Euler(0f, 180f, 0f);
+
+        facingRight = true;
+        targetRot = rightRot;
+
+        ApplyFacingInstantIfNeeded();
     }
 
     private void OnEnable()
     {
-        moveAction.action.Enable();
-        jumpAction.action.Enable();
-        dashAction.action.Enable();
+        if (moveAction != null) moveAction.action.Enable();
+        if (jumpAction != null) jumpAction.action.Enable();
+        if (dashAction != null) dashAction.action.Enable();
 
-        jumpAction.action.performed += OnJump;
-        dashAction.action.started += OnDashStarted;
-        dashAction.action.canceled += OnDashCanceled;
+        if (jumpAction != null) jumpAction.action.performed += OnJump;
+
+        if (dashAction != null)
+        {
+            dashAction.action.started += OnDashStarted;
+            dashAction.action.canceled += OnDashCanceled;
+        }
     }
 
     private void OnDisable()
     {
-        jumpAction.action.performed -= OnJump;
-        dashAction.action.started -= OnDashStarted;
-        dashAction.action.canceled -= OnDashCanceled;
+        if (jumpAction != null) jumpAction.action.performed -= OnJump;
 
-        moveAction.action.Disable();
-        jumpAction.action.Disable();
-        dashAction.action.Disable();
+        if (dashAction != null)
+        {
+            dashAction.action.started -= OnDashStarted;
+            dashAction.action.canceled -= OnDashCanceled;
+        }
+
+        if (moveAction != null) moveAction.action.Disable();
+        if (jumpAction != null) jumpAction.action.Disable();
+        if (dashAction != null) dashAction.action.Disable();
     }
 
     private void Update()
     {
-        moveInput = moveAction.action.ReadValue<Vector2>();
+        moveInput = (moveAction != null) ? moveAction.action.ReadValue<Vector2>() : Vector2.zero;
 
         if (Mathf.Abs(moveInput.x) > 0.01f)
             lastNonZeroMoveX = Mathf.Sign(moveInput.x);
@@ -99,18 +143,18 @@ public class PlayerMovement2_5D : MonoBehaviour
             QueryTriggerInteraction.Ignore
         );
 
-        // Landing (false -> true): reset jump + air dash
         if (!wasGrounded && isGrounded && !isDashing)
         {
             jumpsUsed = 0;
-            airDashUsed = false; // ✅ újratölt földet érés után
-        }
-
-        // Biztonsági reset: ha áll a talajon, legyen újra elérhető
-        if (isGrounded && !isDashing)
-        {
             airDashUsed = false;
         }
+
+        if (isGrounded && !isDashing)
+            airDashUsed = false;
+
+        UpdateAnimator();
+        UpdateFacingTarget();     // cél irány meghatározása
+        SmoothRotateToTarget();   // és minden frame-ben oda forgatjuk
     }
 
     private void FixedUpdate()
@@ -159,12 +203,8 @@ public class PlayerMovement2_5D : MonoBehaviour
         if (Time.time < nextDashTime) return;
         if (isDashing) return;
 
-        // ✅ Levegőben csak egyszer dash-elhet
         if (!isGrounded && airDashUsed) return;
-
-        // Ha levegőben indítja, akkor “elfogyasztjuk”
-        if (!isGrounded)
-            airDashUsed = true;
+        if (!isGrounded) airDashUsed = true;
 
         StartCoroutine(DashHoldRoutine());
     }
@@ -172,6 +212,50 @@ public class PlayerMovement2_5D : MonoBehaviour
     private void OnDashCanceled(InputAction.CallbackContext ctx)
     {
         dashHeld = false;
+    }
+
+    private void UpdateAnimator()
+    {
+        if (animator == null) return;
+
+        bool isRunning = Mathf.Abs(moveInput.x) > runThreshold;
+        if (isDashing) isRunning = false;
+
+        animator.SetBool(RunHash, isRunning);
+    }
+
+    // --- FACING: cél kiválasztása input alapján ---
+    private void UpdateFacingTarget()
+    {
+        if (Mathf.Abs(moveInput.x) < 0.01f) return;
+
+        bool wantRight = moveInput.x > 0f;
+        if (wantRight != facingRight)
+        {
+            facingRight = wantRight;
+            targetRot = facingRight ? rightRot : leftRot;
+        }
+    }
+
+    // --- FACING: folyamatos forgatás a cél felé ---
+    private void SmoothRotateToTarget()
+    {
+        if (visualPivot == null) return;
+
+        if (turnSmoothSpeed <= 0f)
+        {
+            visualPivot.localRotation = targetRot;
+            return;
+        }
+
+        float maxDegrees = turnSmoothSpeed * Time.deltaTime;
+        visualPivot.localRotation = Quaternion.RotateTowards(visualPivot.localRotation, targetRot, maxDegrees);
+    }
+
+    private void ApplyFacingInstantIfNeeded()
+    {
+        if (visualPivot == null) return;
+        if (turnSmoothSpeed <= 0f) visualPivot.localRotation = targetRot;
     }
 
     private IEnumerator DashHoldRoutine()
@@ -197,7 +281,6 @@ public class PlayerMovement2_5D : MonoBehaviour
             traveled += step;
 
             rb.linearVelocity = new Vector3(dashSpeed * dir, 0f, 0f);
-
             yield return new WaitForFixedUpdate();
         }
 
