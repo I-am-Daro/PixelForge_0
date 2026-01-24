@@ -9,6 +9,7 @@ public class PlayerMovement2_5D : MonoBehaviour
     [SerializeField] private InputActionReference moveAction;
     [SerializeField] private InputActionReference jumpAction;
     [SerializeField] private InputActionReference dashAction;
+    [SerializeField] private InputActionReference attackAction;
 
     [Header("Move")]
     [SerializeField] private float moveSpeed = 7f;
@@ -42,19 +43,32 @@ public class PlayerMovement2_5D : MonoBehaviour
     [SerializeField] private float runThreshold = 0.05f;
 
     [Header("Facing (3D)")]
-    [Tooltip("Assign the VisualPivot transform (recommended). This is what will rotate on Y.")]
     [SerializeField] private Transform visualPivot;
-
     [Tooltip("Turning speed in degrees/second. 0 = instant flip. Try 360..1080.")]
     [SerializeField] private float turnSmoothSpeed = 720f;
 
+    [Header("Attack")]
+    [SerializeField] private bool lockMovementDuringAttack = true;
+    [SerializeField] private float attackCooldown = 0.35f;
+    [Tooltip("How long the attack state locks movement (seconds). Should roughly match the clip length.")]
+    [SerializeField] private float attackLockDuration = 0.25f;
+
+    [Header("Attack Hit (Prototype)")]
+    [SerializeField] private Transform attackPoint;
+    [SerializeField] private float attackRange = 0.6f;
+    [Tooltip("When to apply the hit check after starting attack (seconds).")]
+    [SerializeField] private float hitTime = 0.12f;
+    [SerializeField] private LayerMask hittableLayers;
+
     private static readonly int RunHash = Animator.StringToHash("Run");
+    private static readonly int AttackHash = Animator.StringToHash("Attack");
 
     private Rigidbody rb;
     private Vector2 moveInput;
 
     private bool isGrounded;
     private bool wasGrounded;
+
     private int jumpsUsed;
 
     private bool isDashing;
@@ -71,6 +85,10 @@ public class PlayerMovement2_5D : MonoBehaviour
     private Quaternion targetRot;
     private bool facingRight = true;
 
+    // Attack state
+    private bool isAttacking;
+    private float nextAttackTime;
+
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
@@ -79,23 +97,20 @@ public class PlayerMovement2_5D : MonoBehaviour
         if (animator == null)
             animator = GetComponentInChildren<Animator>();
 
-        // VisualPivot fallback
         if (visualPivot == null)
         {
             if (animator != null && animator.transform.parent != null)
-                visualPivot = animator.transform.parent; // VisualPivot
+                visualPivot = animator.transform.parent;
             else
                 visualPivot = transform;
         }
 
-        // "Jobbra néz" = az induló rotáció
+        // jobbra = induló rotáció
         rightRot = visualPivot.localRotation;
         leftRot = rightRot * Quaternion.Euler(0f, 180f, 0f);
-
         facingRight = true;
         targetRot = rightRot;
-
-        ApplyFacingInstantIfNeeded();
+        if (turnSmoothSpeed <= 0f) visualPivot.localRotation = targetRot;
     }
 
     private void OnEnable()
@@ -103,6 +118,7 @@ public class PlayerMovement2_5D : MonoBehaviour
         if (moveAction != null) moveAction.action.Enable();
         if (jumpAction != null) jumpAction.action.Enable();
         if (dashAction != null) dashAction.action.Enable();
+        if (attackAction != null) attackAction.action.Enable();
 
         if (jumpAction != null) jumpAction.action.performed += OnJump;
 
@@ -111,6 +127,9 @@ public class PlayerMovement2_5D : MonoBehaviour
             dashAction.action.started += OnDashStarted;
             dashAction.action.canceled += OnDashCanceled;
         }
+
+        if (attackAction != null)
+            attackAction.action.performed += OnAttack;
     }
 
     private void OnDisable()
@@ -123,9 +142,13 @@ public class PlayerMovement2_5D : MonoBehaviour
             dashAction.action.canceled -= OnDashCanceled;
         }
 
+        if (attackAction != null)
+            attackAction.action.performed -= OnAttack;
+
         if (moveAction != null) moveAction.action.Disable();
         if (jumpAction != null) jumpAction.action.Disable();
         if (dashAction != null) dashAction.action.Disable();
+        if (attackAction != null) attackAction.action.Disable();
     }
 
     private void Update()
@@ -153,13 +176,24 @@ public class PlayerMovement2_5D : MonoBehaviour
             airDashUsed = false;
 
         UpdateAnimator();
-        UpdateFacingTarget();     // cél irány meghatározása
-        SmoothRotateToTarget();   // és minden frame-ben oda forgatjuk
+        UpdateFacingTarget();
+        SmoothRotateToTarget();
+        UpdateAttackPointFacing();
     }
 
     private void FixedUpdate()
     {
         if (isDashing) return;
+
+        if (lockMovementDuringAttack && isAttacking)
+        {
+            // támadás alatt álljunk meg vízszintesen (prototípus)
+            Vector3 vv = rb.linearVelocity;
+            vv.x = 0f;
+            vv.z = 0f;
+            rb.linearVelocity = vv;
+            return;
+        }
 
         Vector3 v = rb.linearVelocity;
         v.x = moveInput.x * moveSpeed;
@@ -167,6 +201,7 @@ public class PlayerMovement2_5D : MonoBehaviour
         rb.linearVelocity = v;
     }
 
+    // ---------------- Jump ----------------
     private void OnJump(InputAction.CallbackContext ctx)
     {
         if (isDashing) return;
@@ -196,6 +231,7 @@ public class PlayerMovement2_5D : MonoBehaviour
         rb.AddForce(Vector3.up * jumpImpulse, ForceMode.Impulse);
     }
 
+    // ---------------- Dash (hold) ----------------
     private void OnDashStarted(InputAction.CallbackContext ctx)
     {
         dashHeld = true;
@@ -212,50 +248,6 @@ public class PlayerMovement2_5D : MonoBehaviour
     private void OnDashCanceled(InputAction.CallbackContext ctx)
     {
         dashHeld = false;
-    }
-
-    private void UpdateAnimator()
-    {
-        if (animator == null) return;
-
-        bool isRunning = Mathf.Abs(moveInput.x) > runThreshold;
-        if (isDashing) isRunning = false;
-
-        animator.SetBool(RunHash, isRunning);
-    }
-
-    // --- FACING: cél kiválasztása input alapján ---
-    private void UpdateFacingTarget()
-    {
-        if (Mathf.Abs(moveInput.x) < 0.01f) return;
-
-        bool wantRight = moveInput.x > 0f;
-        if (wantRight != facingRight)
-        {
-            facingRight = wantRight;
-            targetRot = facingRight ? rightRot : leftRot;
-        }
-    }
-
-    // --- FACING: folyamatos forgatás a cél felé ---
-    private void SmoothRotateToTarget()
-    {
-        if (visualPivot == null) return;
-
-        if (turnSmoothSpeed <= 0f)
-        {
-            visualPivot.localRotation = targetRot;
-            return;
-        }
-
-        float maxDegrees = turnSmoothSpeed * Time.deltaTime;
-        visualPivot.localRotation = Quaternion.RotateTowards(visualPivot.localRotation, targetRot, maxDegrees);
-    }
-
-    private void ApplyFacingInstantIfNeeded()
-    {
-        if (visualPivot == null) return;
-        if (turnSmoothSpeed <= 0f) visualPivot.localRotation = targetRot;
     }
 
     private IEnumerator DashHoldRoutine()
@@ -294,11 +286,111 @@ public class PlayerMovement2_5D : MonoBehaviour
         isDashing = false;
     }
 
+    // ---------------- Attack ----------------
+    private void OnAttack(InputAction.CallbackContext ctx)
+    {
+        if (Time.time < nextAttackTime) return;
+        if (isDashing) return; // protó: dash alatt ne támadjon
+
+        nextAttackTime = Time.time + attackCooldown;
+
+        // anim trigger
+        if (animator != null)
+            animator.SetTrigger(AttackHash);
+
+        // lock (prototípus)
+        if (lockMovementDuringAttack)
+            StartCoroutine(AttackLockRoutine());
+
+        // hit check (prototípus, 1 pillanatban)
+        StartCoroutine(AttackHitRoutine());
+    }
+
+    private IEnumerator AttackLockRoutine()
+    {
+        isAttacking = true;
+        yield return new WaitForSeconds(attackLockDuration);
+        isAttacking = false;
+    }
+
+    private IEnumerator AttackHitRoutine()
+    {
+        yield return new WaitForSeconds(hitTime);
+
+        if (attackPoint == null) yield break;
+
+        Collider[] hits = Physics.OverlapSphere(
+            attackPoint.position,
+            attackRange,
+            hittableLayers,
+            QueryTriggerInteraction.Ignore
+        );
+
+        // Prototípus: csak logolunk
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Debug.Log($"Hit: {hits[i].name}");
+            // Később: ITakeDamage / Health komponens meghívása
+        }
+    }
+
+    private void UpdateAttackPointFacing()
+    {
+        if (attackPoint == null) return;
+
+        // AttackPointot jobbra/balra toljuk X-ben (a local X előjele alapján)
+        Vector3 lp = attackPoint.localPosition;
+        float absX = Mathf.Abs(lp.x);
+        lp.x = facingRight ? absX : -absX;
+        attackPoint.localPosition = lp;
+    }
+
+    // ---------------- Animation + Facing ----------------
+    private void UpdateAnimator()
+    {
+        if (animator == null) return;
+
+        bool isRunning = Mathf.Abs(moveInput.x) > runThreshold;
+        if (isDashing) isRunning = false;
+        if (lockMovementDuringAttack && isAttacking) isRunning = false;
+
+        animator.SetBool(RunHash, isRunning);
+    }
+
+    private void UpdateFacingTarget()
+    {
+        if (Mathf.Abs(moveInput.x) < 0.01f) return;
+
+        bool wantRight = moveInput.x > 0f;
+        if (wantRight != facingRight)
+        {
+            facingRight = wantRight;
+            targetRot = facingRight ? rightRot : leftRot;
+        }
+    }
+
+    private void SmoothRotateToTarget()
+    {
+        if (visualPivot == null) return;
+
+        if (turnSmoothSpeed <= 0f)
+        {
+            visualPivot.localRotation = targetRot;
+            return;
+        }
+
+        float maxDegrees = turnSmoothSpeed * Time.deltaTime;
+        visualPivot.localRotation = Quaternion.RotateTowards(visualPivot.localRotation, targetRot, maxDegrees);
+    }
+
 #if UNITY_EDITOR
     private void OnDrawGizmosSelected()
     {
-        if (groundCheck == null) return;
-        Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+        if (groundCheck != null)
+            Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+
+        if (attackPoint != null)
+            Gizmos.DrawWireSphere(attackPoint.position, attackRange);
     }
 #endif
 }
