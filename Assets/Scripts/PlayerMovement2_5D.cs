@@ -60,6 +60,22 @@ public class PlayerMovement2_5D : MonoBehaviour
     [SerializeField] private float hitTime = 0.12f;
     [SerializeField] private LayerMask hittableLayers;
 
+    [Header("Weapon Summon (Prototype)")]
+    [Tooltip("Where the weapon should appear (e.g., a WeaponSocket under RightHand bone).")]
+    [SerializeField] private Transform weaponSocket;
+
+    [Tooltip("Sword prefab to instantiate under the socket.")]
+    [SerializeField] private GameObject swordPrefab;
+
+    [Tooltip("If true, weapon is instantiated once and just enabled/disabled.")]
+    [SerializeField] private bool poolWeapon = true;
+
+    [Tooltip("Hide weapon on start.")]
+    [SerializeField] private bool hideWeaponOnStart = true;
+
+    private GameObject spawnedSword;
+
+
     private static readonly int RunHash = Animator.StringToHash("Run");
     private static readonly int AttackHash = Animator.StringToHash("Attack");
 
@@ -111,6 +127,17 @@ public class PlayerMovement2_5D : MonoBehaviour
         facingRight = true;
         targetRot = rightRot;
         if (turnSmoothSpeed <= 0f) visualPivot.localRotation = targetRot;
+
+        if (poolWeapon && swordPrefab != null && weaponSocket != null)
+        {
+            spawnedSword = Instantiate(swordPrefab, weaponSocket);
+            spawnedSword.transform.localPosition = Vector3.zero;
+            spawnedSword.transform.localRotation = Quaternion.identity;
+            spawnedSword.transform.localScale = Vector3.one;
+
+            if (hideWeaponOnStart)
+                spawnedSword.SetActive(false);
+        }
     }
 
     private void OnEnable()
@@ -290,20 +317,18 @@ public class PlayerMovement2_5D : MonoBehaviour
     private void OnAttack(InputAction.CallbackContext ctx)
     {
         if (Time.time < nextAttackTime) return;
-        if (isDashing) return; // protó: dash alatt ne támadjon
+        if (isDashing) return;
 
         nextAttackTime = Time.time + attackCooldown;
 
-        // anim trigger
         if (animator != null)
             animator.SetTrigger(AttackHash);
 
-        // lock (prototípus)
         if (lockMovementDuringAttack)
             StartCoroutine(AttackLockRoutine());
 
+
         // hit check (prototípus, 1 pillanatban)
-        StartCoroutine(AttackHitRoutine());
     }
 
     private IEnumerator AttackLockRoutine()
@@ -311,27 +336,6 @@ public class PlayerMovement2_5D : MonoBehaviour
         isAttacking = true;
         yield return new WaitForSeconds(attackLockDuration);
         isAttacking = false;
-    }
-
-    private IEnumerator AttackHitRoutine()
-    {
-        yield return new WaitForSeconds(hitTime);
-
-        if (attackPoint == null) yield break;
-
-        Collider[] hits = Physics.OverlapSphere(
-            attackPoint.position,
-            attackRange,
-            hittableLayers,
-            QueryTriggerInteraction.Ignore
-        );
-
-        // Prototípus: csak logolunk
-        for (int i = 0; i < hits.Length; i++)
-        {
-            Debug.Log($"Hit: {hits[i].name}");
-            // Később: ITakeDamage / Health komponens meghívása
-        }
     }
 
     private void UpdateAttackPointFacing()
@@ -382,6 +386,73 @@ public class PlayerMovement2_5D : MonoBehaviour
         float maxDegrees = turnSmoothSpeed * Time.deltaTime;
         visualPivot.localRotation = Quaternion.RotateTowards(visualPivot.localRotation, targetRot, maxDegrees);
     }
+
+    // Called from Animation Event
+    public void Anim_SummonWeapon()
+    {
+        if (weaponSocket == null || swordPrefab == null) return;
+
+        if (poolWeapon)
+        {
+            if (spawnedSword == null)
+            {
+                spawnedSword = Instantiate(swordPrefab, weaponSocket);
+                spawnedSword.transform.localPosition = Vector3.zero;
+                spawnedSword.transform.localRotation = Quaternion.identity;
+                spawnedSword.transform.localScale = Vector3.one;
+            }
+
+            spawnedSword.SetActive(true);
+        }
+        else
+        {
+            // instantiate each time (less optimal, but simplest)
+            if (spawnedSword != null) Destroy(spawnedSword);
+            spawnedSword = Instantiate(swordPrefab, weaponSocket);
+            spawnedSword.transform.localPosition = Vector3.zero;
+            spawnedSword.transform.localRotation = Quaternion.identity;
+            spawnedSword.transform.localScale = Vector3.one;
+        }
+    }
+
+    // Called from Animation Event
+    public void Anim_DespawnWeapon()
+    {
+        if (spawnedSword == null) return;
+
+        if (poolWeapon)
+            spawnedSword.SetActive(false);
+        else
+        {
+            Destroy(spawnedSword);
+            spawnedSword = null;
+        }
+    }
+
+    // (Optional) Called from Animation Event at the exact hit frame
+    public void Anim_DoHit()
+    {
+        DoHitCheck();
+    }
+
+    private void DoHitCheck()
+    {
+        if (attackPoint == null) return;
+
+        Collider[] hits = Physics.OverlapSphere(
+            attackPoint.position,
+            attackRange,
+            hittableLayers,
+            QueryTriggerInteraction.Ignore
+        );
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Debug.Log($"Hit: {hits[i].name}");
+            // később: Health/IDamageable
+        }
+    }
+
 
 #if UNITY_EDITOR
     private void OnDrawGizmosSelected()

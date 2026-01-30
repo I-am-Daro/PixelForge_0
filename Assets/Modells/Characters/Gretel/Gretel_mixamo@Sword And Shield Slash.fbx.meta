@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 7b13c1db716661d4abd7bccc99de7c6a
+guid: 9cd71152fbaa0ce4a8b1c42b6f6a39da
 ModelImporter:
   serializedVersion: 24200
   internalIDToNameTable: []
@@ -31,20 +31,20 @@ ModelImporter:
     extraUserProperties: []
     clipAnimations:
     - serializedVersion: 16
-      name: Idle
+      name: Sword And Shield Slash
       takeName: mixamo.com
       internalID: -203655887218126122
       firstFrame: 0
-      lastFrame: 609
+      lastFrame: 50
       wrapMode: 0
       orientationOffsetY: 0
       level: 0
       cycleOffset: 0
       loop: 0
       hasAdditiveReferencePose: 0
-      loopTime: 1
-      loopBlend: 1
-      loopBlendOrientation: 0
+      loopTime: 0
+      loopBlend: 0
+      loopBlendOrientation: 1
       loopBlendPositionY: 0
       loopBlendPositionXZ: 0
       keepOriginalOrientation: 1
@@ -54,7 +54,28 @@ ModelImporter:
       mirror: 0
       bodyMask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000
       curves: []
-      events: []
+      events:
+      - time: 0.2334011
+        functionName: Anim_SummonWeapon
+        data: 
+        objectReferenceParameter: {fileID: 7560955051122324002, guid: ab1b3607639bb714281f9264185e6cac, type: 3}
+        floatParameter: 0
+        intParameter: 0
+        messageOptions: 0
+      - time: 0.39831465
+        functionName: Anim_DoHit
+        data: 
+        objectReferenceParameter: {fileID: 7560955051122324002, guid: ab1b3607639bb714281f9264185e6cac, type: 3}
+        floatParameter: 0
+        intParameter: 0
+        messageOptions: 0
+      - time: 0.5893732
+        functionName: Anim_DespawnWeapon
+        data: 
+        objectReferenceParameter: {fileID: 7560955051122324002, guid: ab1b3607639bb714281f9264185e6cac, type: 3}
+        floatParameter: 0
+        intParameter: 0
+        messageOptions: 0
       transformMask: []
       maskType: 3
       maskSource: {instanceID: 0}
