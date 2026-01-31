@@ -126,10 +126,10 @@ TextureImporter:
       name: Full_healthpoint_0
       rect:
         serializedVersion: 2
-        x: 196
-        y: 482
-        width: 640
-        height: 640
+        x: 281
+        y: 575
+        width: 464
+        height: 457
       alignment: 0
       pivot: {x: 0.5, y: 0.5}
       border: {x: 0, y: 0, z: 0, w: 0}

@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -75,6 +76,8 @@ public class PlayerMovement2_5D : MonoBehaviour
 
     private GameObject spawnedSword;
 
+    private int attackId = 0;         // nő minden támadásnál
+    private int lastHitAttackId = -1; // melyik támadásnál ütöttünk már
 
     private static readonly int RunHash = Animator.StringToHash("Run");
     private static readonly int AttackHash = Animator.StringToHash("Attack");
@@ -321,6 +324,9 @@ public class PlayerMovement2_5D : MonoBehaviour
 
         nextAttackTime = Time.time + attackCooldown;
 
+        attackId++;
+        lastHitAttackId = -1; // új támadás: még nem ütöttünk
+
         if (animator != null)
             animator.SetTrigger(AttackHash);
 
@@ -437,19 +443,31 @@ public class PlayerMovement2_5D : MonoBehaviour
 
     private void DoHitCheck()
     {
+        if (lastHitAttackId == attackId) return;
+        lastHitAttackId = attackId;
+
         if (attackPoint == null) return;
 
         Collider[] hits = Physics.OverlapSphere(
             attackPoint.position,
             attackRange,
             hittableLayers,
-            QueryTriggerInteraction.Ignore
+            QueryTriggerInteraction.Collide
         );
+
+        // Egy csapás alatt 1 enemy csak 1x kapjon sebzést
+        var damaged = new HashSet<EnemyAI>();
 
         for (int i = 0; i < hits.Length; i++)
         {
-            Debug.Log($"Hit: {hits[i].name}");
-            // később: Health/IDamageable
+            var enemyAI = hits[i].GetComponentInParent<EnemyAI>();
+            if (enemyAI == null) continue;
+
+            if (damaged.Add(enemyAI)) // csak ha még nem sebzettük ebben a csapásban
+            {
+                enemyAI.TakeDamage(1);
+                Debug.Log("Enemy hit: " + enemyAI.name);
+            }
         }
     }
 
